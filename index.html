@@ -30,7 +30,13 @@ a.sn:hover { text-decoration: underline; }
 .formulas h2 { font-size: 16px; margin-bottom: 12px; }
 .formulas h3 { font-size: 14px; margin-top: 16px; margin-bottom: 4px; color: #555; }
 .formulas code { background: #f0f0f0; padding: 2px 6px; border-radius: 3px; font-size: 13px; }
-.filters { margin: 12px 0; display: flex; gap: 12px; align-items: center; }
+th.sortable { cursor: pointer; user-select: none; }
+th.sortable:hover { background: #e8e8e8; }
+th.sortable::after { content: ''; margin-left: 4px; }
+th.sortable.asc::after { content: ' \u25B2'; }
+th.sortable.desc::after { content: ' \u25BC'; }
+.filters { margin-bottom: 20px; padding: 16px 20px; background: #fff; border: 1px solid #ccc; border-radius: 6px; display: flex; gap: 16px; align-items: center; }
+.filters .filters-title { font-size: 14px; font-weight: bold; margin-right: 4px; }
 .filters label { font-size: 13px; cursor: pointer; user-select: none; }
 .filters input[type="checkbox"] { margin-right: 4px; }
 </style>
@@ -40,6 +46,7 @@ a.sn:hover { text-decoration: underline; }
 <h1>퀀트 스크리너</h1>
 
 <div class="filters">
+  <span class="filters-title">필터</span>
   <label><input type="checkbox" id="f-holding" onchange="renderAll()"> 지주사 제외</label>
   <label><input type="checkbox" id="f-mcap500" onchange="renderAll()"> 시총 500억 이상만</label>
 </div>
@@ -55,7 +62,7 @@ a.sn:hover { text-decoration: underline; }
 
 <div id="total25" class="tab-content active">
   <table>
-    <thead><tr><th>순위</th><th>종목코드</th><th>종목명</th><th>Ultra</th><th>DCF</th><th>MF</th><th>합산</th><th>PER</th><th>ROE</th></tr></thead>
+    <thead><tr><th>순위</th><th>종목코드</th><th>종목명</th><th>Ultra</th><th>DCF</th><th>MF</th><th>합산</th><th class="sortable" onclick="doSort('total25','per')">PER</th><th class="sortable" onclick="doSort('total25','roe')">ROE</th></tr></thead>
     <tbody id="tb-total25"></tbody>
   </table>
   <p class="note">Ultra·DCF·Magic Formula 2025 각 전략 순위 합산 (미포함 종목은 101위 처리) | 2025년 3분기 기준</p>
@@ -63,7 +70,7 @@ a.sn:hover { text-decoration: underline; }
 
 <div id="ultra25" class="tab-content">
   <table>
-    <thead><tr><th>순위</th><th>종목코드</th><th>종목명</th><th>F점수</th><th>합산순위</th><th>1/PER</th><th>1/PBR</th><th>GP/A</th><th>변동성</th><th>PER</th><th>ROE</th></tr></thead>
+    <thead><tr><th>순위</th><th>종목코드</th><th>종목명</th><th>F점수</th><th>합산순위</th><th>1/PER</th><th>1/PBR</th><th>GP/A</th><th>변동성</th><th class="sortable" onclick="doSort('ultra25','per')">PER</th><th class="sortable" onclick="doSort('ultra25','roe')">ROE</th></tr></thead>
     <tbody id="tb-ultra25"></tbody>
   </table>
   <p class="note">강환국 울트라 전략: 12개 지표 백분위 순위 합산 + 신F-스코어(≥3) 필터 | 2025년 3분기 기준</p>
@@ -71,7 +78,7 @@ a.sn:hover { text-decoration: underline; }
 
 <div id="dcf25" class="tab-content">
   <table>
-    <thead><tr><th>순위</th><th>종목코드</th><th>종목명</th><th>매출(억)</th><th>영업이익(억)</th><th>FCF(억)</th><th>적정가</th><th>현재가</th><th>괴리율</th><th>PER</th><th>ROE</th></tr></thead>
+    <thead><tr><th>순위</th><th>종목코드</th><th>종목명</th><th>매출(억)</th><th>영업이익(억)</th><th>FCF(억)</th><th>적정가</th><th>현재가</th><th>괴리율</th><th class="sortable" onclick="doSort('dcf25','per')">PER</th><th class="sortable" onclick="doSort('dcf25','roe')">ROE</th></tr></thead>
     <tbody id="tb-dcf25"></tbody>
   </table>
   <p class="note">가정: 성장률 5%, WACC 10%, 영구성장률 2%, 예측기간 5년 | 2025년 3분기 기준</p>
@@ -79,7 +86,7 @@ a.sn:hover { text-decoration: underline; }
 
 <div id="dcf24" class="tab-content">
   <table>
-    <thead><tr><th>순위</th><th>종목코드</th><th>종목명</th><th>매출(억)</th><th>영업이익(억)</th><th>FCF(억)</th><th>적정가</th><th>현재가</th><th>괴리율</th><th>PER</th><th>ROE</th></tr></thead>
+    <thead><tr><th>순위</th><th>종목코드</th><th>종목명</th><th>매출(억)</th><th>영업이익(억)</th><th>FCF(억)</th><th>적정가</th><th>현재가</th><th>괴리율</th><th class="sortable" onclick="doSort('dcf24','per')">PER</th><th class="sortable" onclick="doSort('dcf24','roe')">ROE</th></tr></thead>
     <tbody id="tb-dcf24"></tbody>
   </table>
   <p class="note">가정: 성장률 5%, WACC 10%, 영구성장률 2%, 예측기간 5년 | 2024년 사업보고서 기준</p>
@@ -87,7 +94,7 @@ a.sn:hover { text-decoration: underline; }
 
 <div id="mf25" class="tab-content">
   <table>
-    <thead><tr><th>순위</th><th>종목코드</th><th>종목명</th><th>매출(억)</th><th>영업이익(억)</th><th>ROIC</th><th>EY</th><th>합산</th><th>PER</th><th>ROE</th></tr></thead>
+    <thead><tr><th>순위</th><th>종목코드</th><th>종목명</th><th>매출(억)</th><th>영업이익(억)</th><th>ROIC</th><th>EY</th><th>합산</th><th class="sortable" onclick="doSort('mf25','per')">PER</th><th class="sortable" onclick="doSort('mf25','roe')">ROE</th></tr></thead>
     <tbody id="tb-mf25"></tbody>
   </table>
   <p class="note">2025년 3분기 기준</p>
@@ -95,7 +102,7 @@ a.sn:hover { text-decoration: underline; }
 
 <div id="mf24" class="tab-content">
   <table>
-    <thead><tr><th>순위</th><th>종목코드</th><th>종목명</th><th>매출(억)</th><th>영업이익(억)</th><th>ROIC</th><th>EY</th><th>합산</th><th>PER</th><th>ROE</th></tr></thead>
+    <thead><tr><th>순위</th><th>종목코드</th><th>종목명</th><th>매출(억)</th><th>영업이익(억)</th><th>ROIC</th><th>EY</th><th>합산</th><th class="sortable" onclick="doSort('mf24','per')">PER</th><th class="sortable" onclick="doSort('mf24','roe')">ROE</th></tr></thead>
     <tbody id="tb-mf24"></tbody>
   </table>
   <p class="note">2024년 사업보고서 기준</p>
@@ -143,24 +150,93 @@ function filterRows(data) {
 }
 
 function renderDcf(id, data) {
-  const d = filterRows(data);
+  const tab = id.replace('tb-','');
+  const d = sortData(tab, filterRows(data));
   document.getElementById(id).innerHTML = d.map((r,i) =>
     `<tr><td>${i+1}</td><td><a class="sc" href="${U(r[0])}">${r[0]}</a></td><td><a class="sn" href="${U(r[0])}" target="_blank">${r[1]}</a></td><td>${N(r[2])}</td><td>${N(r[3])}</td><td>${N(r[4])}</td><td>${N(r[5])}</td><td>${N(r[6])}</td><td class="pos">${r[7]}</td><td>${r[8]}</td><td>${r[9]}</td></tr>`
   ).join('');
 }
 
 function renderMf(id, data) {
-  const d = filterRows(data);
+  const tab = id.replace('tb-','');
+  const d = sortData(tab, filterRows(data));
   document.getElementById(id).innerHTML = d.map((r,i) =>
     `<tr><td>${i+1}</td><td><a class="sc" href="${U(r[0])}">${r[0]}</a></td><td><a class="sn" href="${U(r[0])}" target="_blank">${r[1]}</a></td><td>${N(r[2])}</td><td>${N(r[3])}</td><td>${r[4]}</td><td>${r[5]}</td><td>${r[6]}</td><td>${r[7]}</td><td>${r[8]}</td></tr>`
   ).join('');
 }
 
 function renderUltra(id, data) {
-  const d = filterRows(data);
+  const tab = id.replace('tb-','');
+  const d = sortData(tab, filterRows(data));
   document.getElementById(id).innerHTML = d.map((r,i) =>
     `<tr><td>${i+1}</td><td><a class="sc" href="${U(r[0])}">${r[0]}</a></td><td><a class="sn" href="${U(r[0])}" target="_blank">${r[1]}</a></td><td>${r[2]}</td><td>${r[3]}</td><td>${r[4]}</td><td>${r[5]}</td><td>${r[6]}</td><td>${r[7]}</td><td>${r[8]}</td><td>${r[9]}</td></tr>`
   ).join('');
+}
+
+// 정렬 상태: {tab: {col, dir}}
+const sortState = {};
+
+function parseNum(v) {
+  if (v === '-' || v === '' || v === 'N/A') return Infinity;
+  return parseFloat(String(v).replace('%',''));
+}
+
+// PER/ROE 인덱스 맵 (배열 데이터용)
+const colIdx = {
+  ultra25: {per:8, roe:9},
+  dcf25: {per:8, roe:9},
+  dcf24: {per:8, roe:9},
+  mf25: {per:7, roe:8},
+  mf24: {per:7, roe:8}
+};
+
+function sortData(tab, data) {
+  const s = sortState[tab];
+  if (!s) return data;
+  const sorted = [...data];
+  if (tab === 'total25') {
+    sorted.sort((a,b) => {
+      const va = parseNum(a[s.col]);
+      const vb = parseNum(b[s.col]);
+      return s.dir === 'asc' ? va - vb : vb - va;
+    });
+  } else {
+    const idx = colIdx[tab][s.col];
+    sorted.sort((a,b) => {
+      const va = parseNum(a[idx]);
+      const vb = parseNum(b[idx]);
+      return s.dir === 'asc' ? va - vb : vb - va;
+    });
+  }
+  return sorted;
+}
+
+function updateSortUI(tab) {
+  const container = document.getElementById(tab);
+  container.querySelectorAll('th.sortable').forEach(th => {
+    th.classList.remove('asc','desc');
+  });
+  const s = sortState[tab];
+  if (s) {
+    const ths = container.querySelectorAll('th.sortable');
+    ths.forEach(th => {
+      if (th.textContent.trim() === (s.col === 'per' ? 'PER' : 'ROE')) {
+        th.classList.add(s.dir);
+      }
+    });
+  }
+}
+
+function doSort(tab, col) {
+  const s = sortState[tab];
+  if (s && s.col === col) {
+    if (s.dir === 'asc') sortState[tab] = {col, dir:'desc'};
+    else delete sortState[tab]; // 3번째 클릭: 정렬 해제
+  } else {
+    sortState[tab] = {col, dir:'asc'};
+  }
+  renderAll();
+  updateSortUI(tab);
 }
 
 function renderAll() {
@@ -204,11 +280,19 @@ const allTotal = Object.values(codeMap).map(s => ({...s, sum: s.uRank + s.dRank 
 function renderTotal() {
   const noHolding = document.getElementById('f-holding').checked;
   const min500 = document.getElementById('f-mcap500').checked;
-  const filtered = allTotal.filter(r => {
+  let filtered = allTotal.filter(r => {
     if (noHolding && isHolding(r.name)) return false;
     if (min500 && r.mcap < 500) return false;
     return true;
   });
+  const s = sortState['total25'];
+  if (s) {
+    filtered = [...filtered].sort((a,b) => {
+      const va = parseNum(a[s.col]);
+      const vb = parseNum(b[s.col]);
+      return s.dir === 'asc' ? va - vb : vb - va;
+    });
+  }
   document.getElementById('tb-total25').innerHTML = filtered.slice(0,100).map((r,i) =>
     `<tr><td>${i+1}</td><td><a class="sc" href="${U(r.code)}">${r.code}</a></td><td><a class="sn" href="${U(r.code)}" target="_blank">${r.name}</a></td><td>${r.uRank<=100?r.uRank:'-'}</td><td>${r.dRank<=100?r.dRank:'-'}</td><td>${r.mRank<=100?r.mRank:'-'}</td><td>${r.sum}</td><td>${r.per}</td><td>${r.roe}</td></tr>`
   ).join('');
