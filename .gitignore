@@ -4,3 +4,4 @@ __pycache__/
 !magic_formula.db
 *.log
 docs_cache/
+.DS_Store
