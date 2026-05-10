@@ -8,8 +8,15 @@ import sys
 from datetime import datetime, timedelta
 from pathlib import Path
 
-import OpenDartReader
-from pykrx import stock as krx
+try:
+    import opendartreader as OpenDartReader
+except ModuleNotFoundError:  # pragma: no cover - exercised in runtime env
+    OpenDartReader = None
+
+try:
+    from pykrx import stock as krx
+except ModuleNotFoundError:  # pragma: no cover - exercised in runtime env
+    krx = None
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "magic_formula.db")
 API_KEY_PATH = os.path.expanduser("~/.dart_api_key")
@@ -37,6 +44,23 @@ EXTRA_FINANCIAL_COLUMNS = {
     "retained_earnings": "INTEGER",
 }
 
+PERIOD_CONFIGS = {
+    "Q1": {
+        "reprt_code": "11013",
+        "market_suffix": "0331",
+        "label_suffix": "1분기",
+    },
+    "Q3": {
+        "reprt_code": "11014",
+        "market_suffix": "0930",
+        "label_suffix": "3분기",
+    },
+}
+
+
+def _db_now():
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
 
 def calc_volatility(prices):
     """일별 종가 리스트 → 연환산 변동성 (표준편차 * sqrt(252))."""
@@ -55,18 +79,72 @@ def calc_volatility(prices):
     return math.sqrt(variance) * math.sqrt(252)
 
 
+def _require_runtime_dependency(module, package_name):
+    if module is None:
+        raise ModuleNotFoundError(
+            f"{package_name} is required to fetch market data. Install dependencies from requirements.txt."
+        )
+
+
+def resolve_period_config(period):
+    """수집 대상 기간 식별자 해석.
+
+    지원 예:
+    - 2024   -> 2024년 사업보고서
+    - 2026Q1 -> 2026년 1분기
+    - 2025Q3 -> 2025년 3분기
+    """
+    period = str(period)
+    if period.endswith(("Q1", "Q3")):
+        year = period[:4]
+        quarter = period[4:]
+        cfg = PERIOD_CONFIGS[quarter]
+        return {
+            "storage_key": period,
+            "bsns_year": int(year),
+            "reprt_code": cfg["reprt_code"],
+            "market_date": f"{year}{cfg['market_suffix']}",
+            "shares_year": year,
+            "label": f"{year}년 {cfg['label_suffix']}",
+        }
+
+    return {
+        "storage_key": period,
+        "bsns_year": int(period),
+        "reprt_code": "11011",
+        "market_date": f"{period}1230",
+        "shares_year": period,
+        "label": f"{period}년 사업보고서",
+    }
+
+
 def get_api_key():
     return Path(API_KEY_PATH).read_text().strip()
 
 
-def _ensure_financials_columns(conn):
+def _ensure_columns(conn, table_name, columns):
     existing_cols = {
-        row[1] for row in conn.execute("PRAGMA table_info(financials)").fetchall()
+        row[1] for row in conn.execute(f"PRAGMA table_info({table_name})").fetchall()
     }
-    for col, col_type in EXTRA_FINANCIAL_COLUMNS.items():
+    for col, col_type in columns.items():
         if col in existing_cols:
             continue
-        conn.execute(f"ALTER TABLE financials ADD COLUMN {col} {col_type}")
+        conn.execute(f"ALTER TABLE {table_name} ADD COLUMN {col} {col_type}")
+
+
+def _ensure_companies_columns(conn):
+    _ensure_columns(conn, "companies", {
+        "inserted_at": "TEXT",
+        "updated_at": "TEXT",
+    })
+
+
+def _ensure_financials_columns(conn):
+    _ensure_columns(conn, "financials", {
+        **EXTRA_FINANCIAL_COLUMNS,
+        "inserted_at": "TEXT",
+        "updated_at": "TEXT",
+    })
 
 
 def init_db(db_path=DB_PATH):
@@ -76,7 +154,9 @@ def init_db(db_path=DB_PATH):
             stock_code TEXT PRIMARY KEY,
             corp_code  TEXT,
             corp_name  TEXT,
-            sector     TEXT
+            sector     TEXT,
+            inserted_at TEXT,
+            updated_at  TEXT
         );
         CREATE TABLE IF NOT EXISTS financials (
             stock_code         TEXT,
@@ -106,9 +186,12 @@ def init_db(db_path=DB_PATH):
             net_income_yoy     REAL,
             op_income_qoq      REAL,
             net_income_qoq     REAL,
+            inserted_at        TEXT,
+            updated_at         TEXT,
             PRIMARY KEY (stock_code, bsns_year)
         );
     """)
+    _ensure_companies_columns(conn)
     _ensure_financials_columns(conn)
     conn.commit()
     return conn
@@ -123,9 +206,23 @@ def fetch_company_list(dart):
 
 def save_companies(conn, companies_df):
     for _, row in companies_df.iterrows():
+        now = _db_now()
         conn.execute(
-            "INSERT OR REPLACE INTO companies (stock_code, corp_code, corp_name) VALUES (?, ?, ?)",
-            (row["stock_code"].strip(), row["corp_code"].strip(), row["corp_name"].strip()),
+            """
+            INSERT INTO companies (stock_code, corp_code, corp_name, inserted_at, updated_at)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(stock_code) DO UPDATE SET
+                corp_code = excluded.corp_code,
+                corp_name = excluded.corp_name,
+                updated_at = excluded.updated_at
+            """,
+            (
+                row["stock_code"].strip(),
+                row["corp_code"].strip(),
+                row["corp_name"].strip(),
+                now,
+                now,
+            ),
         )
     conn.commit()
     print(f"  → {len(companies_df)}개 상장기업 저장")
@@ -133,6 +230,7 @@ def save_companies(conn, companies_df):
 
 def _find_trading_date(date_str):
     """주어진 날짜의 시가총액 데이터를 조회, 없으면 이전 거래일 탐색."""
+    _require_runtime_dependency(krx, "pykrx")
     df = krx.get_market_cap(date_str)
     if not df.empty:
         return df
@@ -148,6 +246,7 @@ def _find_trading_date(date_str):
 
 def _find_market_fundamental_date(date_str):
     """주어진 날짜의 기본지표(PER/PBR) 조회, 없으면 이전 거래일 탐색."""
+    _require_runtime_dependency(krx, "pykrx")
     df = krx.get_market_fundamental(date_str, market="ALL")
     if not df.empty:
         return df
@@ -196,11 +295,14 @@ def fetch_market_fundamentals(date_str):
 
 def save_market_caps(conn, bsns_year, market_caps):
     for stock_code, mcap in market_caps.items():
+        now = _db_now()
         conn.execute("""
-            INSERT INTO financials (stock_code, bsns_year, market_cap)
-            VALUES (?, ?, ?)
-            ON CONFLICT(stock_code, bsns_year) DO UPDATE SET market_cap = ?
-        """, (stock_code, bsns_year, mcap, mcap))
+            INSERT INTO financials (stock_code, bsns_year, market_cap, inserted_at, updated_at)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(stock_code, bsns_year) DO UPDATE SET
+                market_cap = excluded.market_cap,
+                updated_at = excluded.updated_at
+        """, (stock_code, bsns_year, mcap, now, now))
     conn.commit()
     print(f"  → {len(market_caps)}개 시가총액 저장 ({bsns_year})")
 
@@ -209,20 +311,22 @@ def save_market_fundamentals(conn, bsns_year, fundamentals):
     for stock_code, metric in fundamentals.items():
         per = metric.get("per")
         pbr = metric.get("pbr")
+        now = _db_now()
         conn.execute("""
-            INSERT INTO financials (stock_code, bsns_year, per, pbr)
-            VALUES (?, ?, ?, ?)
+            INSERT INTO financials (stock_code, bsns_year, per, pbr, inserted_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?)
             ON CONFLICT(stock_code, bsns_year) DO UPDATE SET
                 per = excluded.per,
-                pbr = excluded.pbr
-        """, (stock_code, bsns_year, per, pbr))
+                pbr = excluded.pbr,
+                updated_at = excluded.updated_at
+        """, (stock_code, bsns_year, per, pbr, now, now))
     conn.commit()
     print(f"  → {len(fundamentals)}개 PER/PBR 저장 ({bsns_year})")
 
 
-def fetch_shares_outstanding(bsns_year):
+def fetch_shares_outstanding(date_str):
     """pykrx 상장주식수. {종목코드: 주식수}."""
-    df = _find_trading_date(f"{bsns_year}1230")
+    df = _find_trading_date(date_str)
     if df.empty:
         return {}
     return {code: int(row["상장주식수"]) for code, row in df.iterrows()}
@@ -230,10 +334,11 @@ def fetch_shares_outstanding(bsns_year):
 
 def save_shares(conn, bsns_year, shares_map):
     for stock_code, shares in shares_map.items():
+        now = _db_now()
         conn.execute("""
-            UPDATE financials SET shares_outstanding = ?
+            UPDATE financials SET shares_outstanding = ?, updated_at = ?
             WHERE stock_code = ? AND bsns_year = ?
-        """, (shares, stock_code, bsns_year))
+        """, (shares, now, stock_code, bsns_year))
     conn.commit()
     print(f"  → {len(shares_map)}개 상장주식수 저장 ({bsns_year})")
 
@@ -435,6 +540,7 @@ def fetch_detail_accounts(dart, stock_code, bsns_year, reprt_code="11011"):
 def save_financials(conn, bsns_year, financials_data):
     """재무데이터 일괄 저장."""
     for stock_code, info in financials_data.items():
+        now = _db_now()
         conn.execute("""
             INSERT INTO financials (
                 stock_code, bsns_year, revenue, operating_income,
@@ -443,8 +549,9 @@ def save_financials(conn, bsns_year, financials_data):
                 operating_cash_flow, depreciation, capex, tax_expense, interest_expense,
                 gross_profit, net_income, short_term_borrowings, long_term_borrowings,
                 op_income_yoy, net_income_yoy, op_income_qoq, net_income_qoq,
-                quarterly_revenue, quarterly_ocf, quarterly_capex, retained_earnings
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                quarterly_revenue, quarterly_ocf, quarterly_capex, retained_earnings,
+                inserted_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(stock_code, bsns_year) DO UPDATE SET
                 revenue=excluded.revenue,
                 operating_income=excluded.operating_income,
@@ -470,7 +577,8 @@ def save_financials(conn, bsns_year, financials_data):
                 quarterly_revenue=excluded.quarterly_revenue,
                 quarterly_ocf=excluded.quarterly_ocf,
                 quarterly_capex=excluded.quarterly_capex,
-                retained_earnings=excluded.retained_earnings
+                retained_earnings=excluded.retained_earnings,
+                updated_at=excluded.updated_at
         """, (
             stock_code, bsns_year,
             info.get("revenue", 0), info.get("operating_income", 0),
@@ -486,15 +594,17 @@ def save_financials(conn, bsns_year, financials_data):
             info.get("op_income_qoq"), info.get("net_income_qoq"),
             info.get("quarterly_revenue"), info.get("quarterly_ocf"),
             info.get("quarterly_capex"), info.get("retained_earnings"),
+            now, now,
         ))
     conn.commit()
     print(f"  → {len(financials_data)}개 재무데이터 저장 ({bsns_year})")
 
 
-def fetch_and_save_volatility(conn, bsns_year, targets):
-    """pykrx로 종목별 1년간 일별 종가 → 연환산 변동성 계산 후 DB 저장."""
-    start = f"{bsns_year}0101"
-    end = f"{bsns_year}1231"
+def fetch_and_save_volatility(conn, storage_key, targets, end_date):
+    """pykrx로 종목별 기준일 직전 1년간 일별 종가 → 연환산 변동성 계산 후 DB 저장."""
+    end_dt = datetime.strptime(end_date, "%Y%m%d")
+    start = (end_dt - timedelta(days=365)).strftime("%Y%m%d")
+    end = end_date
     saved = 0
     for i, sc in enumerate(targets):
         try:
@@ -504,10 +614,11 @@ def fetch_and_save_volatility(conn, bsns_year, targets):
             prices = df["종가"].tolist()
             vol = calc_volatility(prices)
             if vol is not None:
+                now = _db_now()
                 conn.execute("""
-                    UPDATE financials SET price_volatility = ?
+                    UPDATE financials SET price_volatility = ?, updated_at = ?
                     WHERE stock_code = ? AND bsns_year = ?
-                """, (vol, sc, bsns_year))
+                """, (vol, now, sc, storage_key))
                 saved += 1
         except Exception:
             pass
@@ -515,7 +626,7 @@ def fetch_and_save_volatility(conn, bsns_year, targets):
             print(f"    변동성 {i+1}/{len(targets)} ({saved}개 저장)")
         time.sleep(0.2)
     conn.commit()
-    print(f"  → {saved}개 변동성 저장 ({bsns_year})")
+    print(f"  → {saved}개 변동성 저장 ({storage_key})")
 
 
 def run(years=None, limit=None):
@@ -527,7 +638,8 @@ def run(years=None, limit=None):
     if years is None:
         years = ["2023", "2024"]
 
-    dart = OpenDartReader(get_api_key())
+    _require_runtime_dependency(OpenDartReader, "OpenDartReader")
+    dart = OpenDartReader.OpenDartReader(get_api_key())
     conn = init_db()
 
     # 1) 상장기업 목록
@@ -537,26 +649,23 @@ def run(years=None, limit=None):
 
     dart_codes = set(companies_df["stock_code"].str.strip().tolist())
 
-    for year in years:
-        print(f"\n===== {year}년 데이터 수집 =====")
-
-        # 연도별 reprt_code 결정: 2025년은 3분기보고서, 그 외 사업보고서
-        if year == "2025":
-            reprt_code = "11014"  # 3분기보고서
-            mcap_date = f"{year}0930"
-            print(f"  reprt_code={reprt_code} (3분기), 시총기준일={mcap_date}")
-        else:
-            reprt_code = "11011"  # 사업보고서
-            mcap_date = f"{year}1230"
+    for period in years:
+        config = resolve_period_config(period)
+        storage_key = config["storage_key"]
+        bsns_year = config["bsns_year"]
+        reprt_code = config["reprt_code"]
+        mcap_date = config["market_date"]
+        print(f"\n===== {config['label']} 데이터 수집 =====")
+        print(f"  reprt_code={reprt_code}, 시총기준일={mcap_date}, 저장키={storage_key}")
 
         # 2) 시가총액 + 상장주식수 → 양쪽 모두 있는 종목만 대상
-        print(f"[2] 시가총액/상장주식수 수집 ({year})...")
+        print(f"[2] 시가총액/상장주식수 수집 ({storage_key})...")
         market_caps = fetch_market_caps(mcap_date)
-        save_market_caps(conn, year, market_caps)
+        save_market_caps(conn, storage_key, market_caps)
         fundamentals = fetch_market_fundamentals(mcap_date)
-        save_market_fundamentals(conn, year, fundamentals)
-        shares = fetch_shares_outstanding(year)
-        save_shares(conn, year, shares)
+        save_market_fundamentals(conn, storage_key, fundamentals)
+        shares = fetch_shares_outstanding(mcap_date)
+        save_shares(conn, storage_key, shares)
 
         # DART에도 있고 KRX에도 있는 종목, 시가총액 큰 순서로
         targets = sorted(
@@ -568,22 +677,22 @@ def run(years=None, limit=None):
         print(f"  대상 종목: {len(targets)}개")
 
         # 3) 재무데이터 (finstate + finstate_all 개별 호출)
-        print(f"[3] 재무데이터 수집 ({year}, {len(targets)}개 종목)...")
+        print(f"[3] 재무데이터 수집 ({storage_key}, {len(targets)}개 종목)...")
         all_data = {}
         errors = 0
         for i, sc in enumerate(targets):
             # 주요 항목
-            info = fetch_finstate(dart, sc, int(year), reprt_code=reprt_code)
+            info = fetch_finstate(dart, sc, bsns_year, reprt_code=reprt_code)
             if info is None:
                 errors += 1
                 continue
 
             # 세부 항목
-            detail = fetch_detail_accounts(dart, sc, int(year), reprt_code=reprt_code)
+            detail = fetch_detail_accounts(dart, sc, bsns_year, reprt_code=reprt_code)
             info.update(detail)
 
             # QOQ 성장률은 이전 분기와 비교 (Q3/H1에서만 계산)
-            prev_income = fetch_previous_quarter_income(dart, sc, int(year), reprt_code=reprt_code)
+            prev_income = fetch_previous_quarter_income(dart, sc, bsns_year, reprt_code=reprt_code)
             if prev_income:
                 prev_op = prev_income.get("operating_income_q")
                 prev_net = prev_income.get("net_income_q")
@@ -597,12 +706,12 @@ def run(years=None, limit=None):
             if (i + 1) % 100 == 0:
                 print(f"    {i+1}/{len(targets)} ({len(all_data)}개 성공, {errors}개 실패)")
 
-        save_financials(conn, year, all_data)
+        save_financials(conn, storage_key, all_data)
         print(f"  최종: {len(all_data)}개 성공, {errors}개 실패")
 
         # 4) 변동성 수집
-        print(f"[4] 주가 변동성 수집 ({year}, {len(targets)}개 종목)...")
-        fetch_and_save_volatility(conn, year, targets)
+        print(f"[4] 주가 변동성 수집 ({storage_key}, {len(targets)}개 종목)...")
+        fetch_and_save_volatility(conn, storage_key, targets, end_date=mcap_date)
 
     conn.close()
     print("\n완료!")
