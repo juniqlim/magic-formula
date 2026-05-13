@@ -5,6 +5,7 @@ import os
 import sqlite3
 import time
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -20,6 +21,18 @@ except ModuleNotFoundError:  # pragma: no cover - exercised in runtime env
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "magic_formula.db")
 API_KEY_PATH = os.path.expanduser("~/.dart_api_key")
+KRX_CRED_PATH = os.path.expanduser("~/.krx_credentials")
+
+def _load_krx_credentials():
+    path = Path(KRX_CRED_PATH)
+    if not path.exists():
+        return
+    lines = path.read_text().strip().splitlines()
+    if len(lines) >= 2:
+        os.environ.setdefault("KRX_ID", lines[0].strip())
+        os.environ.setdefault("KRX_PW", lines[1].strip())
+
+_load_krx_credentials()
 CALL_DELAY = 0.7  # DART API: 100 req/min
 PREV_REPORT_CODE_MAP = {
     "11014": "11012",  # Q3 -> H1
@@ -677,21 +690,18 @@ def run(years=None, limit=None):
         print(f"  대상 종목: {len(targets)}개")
 
         # 3) 재무데이터 (finstate + finstate_all 개별 호출)
-        print(f"[3] 재무데이터 수집 ({storage_key}, {len(targets)}개 종목)...")
-        all_data = {}
-        errors = 0
-        for i, sc in enumerate(targets):
-            # 주요 항목
+        existing = {row[0] for row in conn.execute(
+            "SELECT stock_code FROM financials WHERE bsns_year=?", (storage_key,)
+        ).fetchall()}
+        remaining = [sc for sc in targets if sc not in existing]
+        print(f"[3] 재무데이터 수집 ({storage_key}, {len(targets)}개 중 {len(existing)}개 기존, {len(remaining)}개 신규)...")
+
+        def _fetch_one(sc):
             info = fetch_finstate(dart, sc, bsns_year, reprt_code=reprt_code)
             if info is None:
-                errors += 1
-                continue
-
-            # 세부 항목
+                return sc, None
             detail = fetch_detail_accounts(dart, sc, bsns_year, reprt_code=reprt_code)
             info.update(detail)
-
-            # QOQ 성장률은 이전 분기와 비교 (Q3/H1에서만 계산)
             prev_income = fetch_previous_quarter_income(dart, sc, bsns_year, reprt_code=reprt_code)
             if prev_income:
                 prev_op = prev_income.get("operating_income_q")
@@ -700,14 +710,23 @@ def run(years=None, limit=None):
                 curr_net = info.get("net_income_q")
                 info["op_income_qoq"] = _calc_growth_rate(curr_op, prev_op) if curr_op is not None else None
                 info["net_income_qoq"] = _calc_growth_rate(curr_net, prev_net) if curr_net is not None else None
+            return sc, info
 
-            all_data[sc] = info
-
-            if (i + 1) % 100 == 0:
-                print(f"    {i+1}/{len(targets)} ({len(all_data)}개 성공, {errors}개 실패)")
+        all_data = {}
+        errors = 0
+        with ThreadPoolExecutor(max_workers=3) as executor:
+            futures = {executor.submit(_fetch_one, sc): sc for sc in remaining}
+            for i, future in enumerate(as_completed(futures), 1):
+                sc, info = future.result()
+                if info is None:
+                    errors += 1
+                else:
+                    all_data[sc] = info
+                if i % 100 == 0:
+                    print(f"    {i}/{len(remaining)} ({len(all_data)}개 성공, {errors}개 실패)")
 
         save_financials(conn, storage_key, all_data)
-        print(f"  최종: {len(all_data)}개 성공, {errors}개 실패")
+        print(f"  최종: {len(all_data)}개 신규 + {len(existing)}개 기존, {errors}개 실패")
 
         # 4) 변동성 수집
         print(f"[4] 주가 변동성 수집 ({storage_key}, {len(targets)}개 종목)...")

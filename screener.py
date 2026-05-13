@@ -234,6 +234,27 @@ def print_magic_formula(bsns_year, top_n=30):
               f"{s['earnings_yield']:>8.1%} {s['magic_rank']:>6}")
 
 
+def save_magic_formula_md(bsns_year, top_n=30):
+    """마법공식 결과를 마크다운 파일로 저장."""
+    stocks = load_stocks_from_db(bsns_year)
+    ranked = rank_stocks(stocks)
+
+    lines = [f"# Magic Formula Top {top_n} — {bsns_year}", "",
+             "| 순위 | 종목코드 | 종목명 | 매출(억) | 영업이익(억) | ROIC | EY | 합산 |",
+             "|-----:|:------:|:------|--------:|-----------:|-----:|---:|-----:|"]
+    for i, s in enumerate(ranked[:top_n], 1):
+        lines.append(
+            f"| {i} | {s['stock_code']} | {s['name']} "
+            f"| {s.get('revenue',0)/1e8:,.0f} | {s['ebit']/1e8:,.0f} "
+            f"| {s['roic']:.1%} | {s['earnings_yield']:.1%} | {s['magic_rank']} |"
+        )
+
+    path = os.path.join(os.path.dirname(__file__), f"magic_formula_{bsns_year}.md")
+    with open(path, "w") as f:
+        f.write("\n".join(lines) + "\n")
+    print(f"저장: {path}")
+
+
 def load_stock_financials(stock_code, bsns_year, db_path=DB_PATH):
     """SQLite에서 특정 종목의 재무데이터 조회."""
     conn = sqlite3.connect(db_path)
@@ -414,3 +435,4 @@ if __name__ == "__main__":
     else:
         year = sys.argv[1] if len(sys.argv) > 1 else "2024"
         print_magic_formula(year)
+        save_magic_formula_md(year)
