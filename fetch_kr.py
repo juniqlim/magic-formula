@@ -613,19 +613,27 @@ def save_financials(conn, bsns_year, financials_data):
     print(f"  → {len(financials_data)}개 재무데이터 저장 ({bsns_year})")
 
 
+def _fetch_one_volatility(sc, start, end):
+    try:
+        df = krx.get_market_ohlcv(start, end, sc)
+        if df is None or df.empty:
+            return sc, None
+        prices = df["종가"].tolist()
+        return sc, calc_volatility(prices)
+    except Exception:
+        return sc, None
+
+
 def fetch_and_save_volatility(conn, storage_key, targets, end_date):
     """pykrx로 종목별 기준일 직전 1년간 일별 종가 → 연환산 변동성 계산 후 DB 저장."""
     end_dt = datetime.strptime(end_date, "%Y%m%d")
     start = (end_dt - timedelta(days=365)).strftime("%Y%m%d")
     end = end_date
     saved = 0
-    for i, sc in enumerate(targets):
-        try:
-            df = krx.get_market_ohlcv(start, end, sc)
-            if df is None or df.empty:
-                continue
-            prices = df["종가"].tolist()
-            vol = calc_volatility(prices)
+    with ThreadPoolExecutor(max_workers=3) as executor:
+        futures = {executor.submit(_fetch_one_volatility, sc, start, end): sc for sc in targets}
+        for i, future in enumerate(as_completed(futures), 1):
+            sc, vol = future.result()
             if vol is not None:
                 now = _db_now()
                 conn.execute("""
@@ -633,11 +641,8 @@ def fetch_and_save_volatility(conn, storage_key, targets, end_date):
                     WHERE stock_code = ? AND bsns_year = ?
                 """, (vol, now, sc, storage_key))
                 saved += 1
-        except Exception:
-            pass
-        if (i + 1) % 100 == 0:
-            print(f"    변동성 {i+1}/{len(targets)} ({saved}개 저장)")
-        time.sleep(0.2)
+            if i % 100 == 0:
+                print(f"    변동성 {i}/{len(targets)} ({saved}개 저장)")
     conn.commit()
     print(f"  → {saved}개 변동성 저장 ({storage_key})")
 
@@ -691,7 +696,7 @@ def run(years=None, limit=None):
 
         # 3) 재무데이터 (finstate + finstate_all 개별 호출)
         existing = {row[0] for row in conn.execute(
-            "SELECT stock_code FROM financials WHERE bsns_year=?", (storage_key,)
+            "SELECT stock_code FROM financials WHERE bsns_year=? AND revenue IS NOT NULL", (storage_key,)
         ).fetchall()}
         remaining = [sc for sc in targets if sc not in existing]
         print(f"[3] 재무데이터 수집 ({storage_key}, {len(targets)}개 중 {len(existing)}개 기존, {len(remaining)}개 신규)...")

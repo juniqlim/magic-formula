@@ -133,6 +133,8 @@ def main():
 
     print("Building ultra25...")
     ultra25 = build_ultra("2025")
+    print("Building ultra24...")
+    ultra24 = build_ultra("2024")
     print("Building dcf25...")
     dcf25 = build_dcf("2025")
     print("Building dcf24...")
@@ -146,6 +148,7 @@ def main():
 
     replacements = {
         "ultra25": ultra25,
+        "ultra24": ultra24,
         "dcf25": dcf25,
         "dcf24": dcf24,
         "mf25": mf25,

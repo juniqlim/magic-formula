@@ -112,7 +112,7 @@ def dcf_from_financials(financial, growth_rate=0.05, wacc=0.10, terminal_growth=
         # 운전자본 변동: 전년도 데이터가 있으면 계산, 없으면 0
         if prev_financial:
             def _wc(f):
-                return (f.get("current_assets", 0) - f.get("cash", 0)) - f.get("current_liabilities", 0)
+                return ((f.get("current_assets") or 0) - (f.get("cash") or 0)) - (f.get("current_liabilities") or 0)
             wc_change = _wc(financial) - _wc(prev_financial)
         else:
             wc_change = 0
