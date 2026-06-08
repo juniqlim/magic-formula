@@ -94,6 +94,83 @@ def build_dcf(bsns_year, top_n=TOP_N_DCF):
     return rows
 
 
+TOP_N_FCF = 100
+
+
+def fcf_yield_map(records):
+    """{stock_code: FCF/시총}. FCF>0, 시총>0 종목만."""
+    out = {}
+    for r in records:
+        mcap = r.get("market_cap")
+        ocf = r.get("ocf")
+        capex = r.get("capex")
+        if not mcap or mcap <= 0 or ocf is None or capex is None:
+            continue
+        fcf = ocf - capex
+        if fcf <= 0:
+            continue
+        out[r["stock_code"]] = fcf / mcap
+    return out
+
+
+def fcf_rows_from_records(records, top_n=TOP_N_FCF, prev_yield=None):
+    """FCF 수익률 순위 행 생성 (순수 함수, DB 비의존).
+
+    records: [{stock_code, name, ocf, capex, market_cap, per, pbr}, ...]
+    prev_yield: {stock_code: 전년도 FCF/시총} (옵션).
+    반환: [[stock_code, name, fcf_억, mcap_억, "FCF/시총%", "FCF/시총(전년)%",
+            "시총/FCF", "PER", "ROE%"], ...]
+          FCF/시총 내림차순 정렬, 상위 top_n개.
+    """
+    prev_yield = prev_yield or {}
+    out = []
+    for r in records:
+        mcap = r.get("market_cap")
+        ocf = r.get("ocf")
+        capex = r.get("capex")
+        if not mcap or mcap <= 0 or ocf is None or capex is None:
+            continue
+        fcf = ocf - capex
+        if fcf <= 0:
+            continue
+        fcf_yield = fcf / mcap
+        prev = prev_yield.get(r["stock_code"])
+        prev_str = f"{prev * 100:.1f}%" if prev is not None else "-"
+        out.append({
+            "yield": fcf_yield,
+            "row": [
+                r["stock_code"], r["name"], _억(fcf), _억(mcap),
+                f"{fcf_yield * 100:.1f}%", prev_str, f"{1 / fcf_yield:.1f}",
+                _per_str(r.get("per")), _roe(r.get("per"), r.get("pbr")),
+            ],
+        })
+    out.sort(key=lambda x: x["yield"], reverse=True)
+    return [x["row"] for x in out[:top_n]]
+
+
+def _fcf_records(bsns_year):
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    rows = conn.execute(
+        """
+        SELECT f.stock_code, c.corp_name AS name,
+               f.operating_cash_flow AS ocf, f.capex, f.market_cap, f.per, f.pbr
+        FROM financials f JOIN companies c ON c.stock_code = f.stock_code
+        WHERE f.bsns_year = ?
+        """,
+        (bsns_year,),
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def build_fcf(bsns_year, prev_year=None, top_n=TOP_N_FCF):
+    """fcf25: FCF/시총 상위 종목. 연말 기준. prev_year 전년도 FCF/시총 병기."""
+    records = _fcf_records(bsns_year)
+    prev = fcf_yield_map(_fcf_records(prev_year)) if prev_year else None
+    return fcf_rows_from_records(records, top_n, prev_yield=prev)
+
+
 def build_mf(bsns_year, top_n=TOP_N_MF):
     """mf: [[stock_code, name, rev_억, op_억, "ROIC%", "EY%", combined_rank, "PER", "ROE%"], ...]."""
     stocks = load_stocks_from_db(bsns_year)
@@ -143,6 +220,8 @@ def main():
     mf25 = build_mf("2025")
     print("Building mf24...")
     mf24 = build_mf("2024")
+    print("Building fcf25...")
+    fcf25 = build_fcf("2025", prev_year="2024")
     print("Building mcap25...")
     mcap25 = build_mcap("2025")
 
@@ -153,6 +232,7 @@ def main():
         "dcf24": dcf24,
         "mf25": mf25,
         "mf24": mf24,
+        "fcf25": fcf25,
         "mcap25": mcap25,
     }
 
