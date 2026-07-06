@@ -2,9 +2,12 @@
 
 import math
 import os
+import socket
 import sqlite3
 import time
 import sys
+
+socket.setdefaulttimeout(30)  # 네트워크 무한 대기 방지 (2026-07-06: 22시간 행 사고 후 추가)
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -630,7 +633,7 @@ def fetch_and_save_volatility(conn, storage_key, targets, end_date):
     start = (end_dt - timedelta(days=365)).strftime("%Y%m%d")
     end = end_date
     saved = 0
-    with ThreadPoolExecutor(max_workers=3) as executor:
+    with ThreadPoolExecutor(max_workers=5) as executor:
         futures = {executor.submit(_fetch_one_volatility, sc, start, end): sc for sc in targets}
         for i, future in enumerate(as_completed(futures), 1):
             sc, vol = future.result()
@@ -719,7 +722,7 @@ def run(years=None, limit=None):
 
         all_data = {}
         errors = 0
-        with ThreadPoolExecutor(max_workers=3) as executor:
+        with ThreadPoolExecutor(max_workers=5) as executor:
             futures = {executor.submit(_fetch_one, sc): sc for sc in remaining}
             for i, future in enumerate(as_completed(futures), 1):
                 sc, info = future.result()

@@ -1,11 +1,11 @@
 """generate_html FCF 순위 로직 단위 테스트 (DB 비의존)."""
 
-from generate_html import fcf_rows_from_records, fcf_yield_map
+from generate_html import fcf_rows_from_records, fcf_yield_map, is_fcf_distorted
 
 
-def _rec(code, name, ocf, capex, mcap, per=None, pbr=None):
+def _rec(code, name, ocf, capex, mcap, per=None, pbr=None, net_income=1):
     return {"stock_code": code, "name": name, "ocf": ocf, "capex": capex,
-            "market_cap": mcap, "per": per, "pbr": pbr}
+            "market_cap": mcap, "per": per, "pbr": pbr, "net_income": net_income}
 
 
 def test_sorts_by_fcf_yield_desc():
@@ -50,10 +50,47 @@ def test_prev_year_yield_column():
     assert row[5] == "35.0%"
 
 
+def test_excludes_loss_making():
+    records = [
+        _rec("A", "에이", ocf=200, capex=0, mcap=1000, net_income=10),   # 흑자 유지
+        _rec("B", "비", ocf=300, capex=0, mcap=1000, net_income=-5),     # 적자 제외
+        _rec("C", "씨", ocf=200, capex=0, mcap=1000, net_income=0),      # 손익0 제외
+        _rec("D", "디", ocf=200, capex=0, mcap=1000, net_income=None),   # 순익없음 제외
+    ]
+    rows = fcf_rows_from_records(records)
+    assert [r[0] for r in rows] == ["A"]
+
+
 def test_top_n_limit():
     records = [_rec(str(i), str(i), ocf=i + 1, capex=0, mcap=1000) for i in range(10)]
     rows = fcf_rows_from_records(records, top_n=3)
     assert len(rows) == 3
+
+
+def test_is_fcf_distorted():
+    # 금융: OCF에 자금흐름 섞임
+    assert is_fcf_distorted("상상인저축은행")
+    assert is_fcf_distorted("미래에셋증권")
+    assert is_fcf_distorted("삼성생명보험")
+    assert is_fcf_distorted("한국캐피탈")
+    # 유통: 리스 착시
+    assert is_fcf_distorted("롯데하이마트")
+    assert is_fcf_distorted("현대백화점")
+    assert is_fcf_distorted("GS홈쇼핑")
+    # 정상 제조/서비스는 통과
+    assert not is_fcf_distorted("일지테크")
+    assert not is_fcf_distorted("서한")
+    assert not is_fcf_distorted("HS화성")
+
+
+def test_distorted_excluded_from_rows():
+    records = [
+        _rec("A", "일지테크", ocf=200, capex=0, mcap=1000),
+        _rec("B", "롯데하이마트", ocf=500, capex=0, mcap=1000),
+        _rec("C", "상상인저축은행", ocf=900, capex=0, mcap=1000),
+    ]
+    rows = fcf_rows_from_records(records)
+    assert [r[0] for r in rows] == ["A"]
 
 
 def test_fcf_yield_map_filters():

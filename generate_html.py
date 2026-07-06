@@ -97,6 +97,21 @@ def build_dcf(bsns_year, top_n=TOP_N_DCF):
 TOP_N_FCF = 100
 
 
+# FCF 착시 업종 (sector 미수집 → 회사명 키워드로 판별)
+#  금융: OCF에 예금·대출 등 자금흐름이 섞여 FCF 의미 없음
+#  유통: IFRS16 리스원금 상환이 영업이 아닌 재무로 빠져 FCF 과대
+FCF_DISTORT_KW = [
+    "은행", "증권", "보험", "캐피탈", "캐피털", "카드", "저축",
+    "금융", "인베스트", "자산운용", "리츠", "신용정보", "파이낸셜",
+    "백화점", "마트", "홈쇼핑", "면세", "유통", "리테일", "쇼핑",
+]
+
+
+def is_fcf_distorted(name):
+    """회사명이 FCF 착시 업종(금융·유통) 키워드를 포함하면 True."""
+    return any(kw in name for kw in FCF_DISTORT_KW)
+
+
 def fcf_yield_map(records):
     """{stock_code: FCF/시총}. FCF>0, 시총>0 종목만."""
     out = {}
@@ -128,7 +143,12 @@ def fcf_rows_from_records(records, top_n=TOP_N_FCF, prev_yield=None):
         mcap = r.get("market_cap")
         ocf = r.get("ocf")
         capex = r.get("capex")
+        ni = r.get("net_income")
         if not mcap or mcap <= 0 or ocf is None or capex is None:
+            continue
+        if ni is None or ni <= 0:   # 적자·손익0·순익없음 제외
+            continue
+        if is_fcf_distorted(r["name"]):   # 금융·유통 착시 제외
             continue
         fcf = ocf - capex
         if fcf <= 0:
@@ -154,7 +174,8 @@ def _fcf_records(bsns_year):
     rows = conn.execute(
         """
         SELECT f.stock_code, c.corp_name AS name,
-               f.operating_cash_flow AS ocf, f.capex, f.market_cap, f.per, f.pbr
+               f.operating_cash_flow AS ocf, f.capex, f.market_cap, f.per, f.pbr,
+               f.net_income
         FROM financials f JOIN companies c ON c.stock_code = f.stock_code
         WHERE f.bsns_year = ?
         """,
