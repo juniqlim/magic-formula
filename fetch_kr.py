@@ -736,9 +736,12 @@ def run(years=None, limit=None):
         save_financials(conn, storage_key, all_data)
         print(f"  최종: {len(all_data)}개 신규 + {len(existing)}개 기존, {errors}개 실패")
 
-        # 4) 변동성 수집
-        print(f"[4] 주가 변동성 수집 ({storage_key}, {len(targets)}개 종목)...")
-        fetch_and_save_volatility(conn, storage_key, targets, end_date=mcap_date)
+        # 4) 변동성 수집 (SKIP_VOLATILITY=1로 건너뜀 — pykrx가 간헐적으로 무한대기)
+        if os.environ.get("SKIP_VOLATILITY") == "1":
+            print(f"[4] 주가 변동성 수집 건너뜀 (SKIP_VOLATILITY=1)")
+        else:
+            print(f"[4] 주가 변동성 수집 ({storage_key}, {len(targets)}개 종목)...")
+            fetch_and_save_volatility(conn, storage_key, targets, end_date=mcap_date)
 
     conn.close()
     print("\n완료!")
